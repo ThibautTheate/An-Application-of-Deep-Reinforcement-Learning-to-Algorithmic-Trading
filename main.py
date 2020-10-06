@@ -34,11 +34,12 @@ if(__name__ == '__main__'):
     stock = args.stock
 
     # Training and testing of the trading strategy specified for the stock (market) specified
-    simulator.simulateNewStrategy(strategy, stock, saveStrategy=True)
+    simulator.simulateNewStrategy(strategy, stock, saveStrategy=False)
     """
-    simulator.simulateNewStrategy(strategy, stock, saveStrategy=True)
     simulator.displayTestbench()
     simulator.analyseTimeSeries(stock)
+    simulator.simulateNewStrategy(strategy, stock, saveStrategy=False)
     simulator.simulateExistingStrategy(strategy, stock)
+    simulator.evaluateStrategy(strategy, saveStrategy=False)
     simulator.evaluateStock(stock)
     """
