@@ -71,6 +71,7 @@ L2Factor = 0.000001
 # Default paramter related to the hardware acceleration (CUDA)
 GPUNumber = 0
 
+timesteps = 4
 ###############################################################################
 ############################### Class ReplayMemory ############################
 ###############################################################################
@@ -120,7 +121,7 @@ class ReplayMemory:
 
         self.memory.append((state, action, reward, nextState, done))
 
-    def sample(self, batchSize):
+    def sample(self, batchSize, timesteps=1):
         """
         GOAL: Sample a batch of experiences from the replay memory.
 
@@ -132,9 +133,22 @@ class ReplayMemory:
                  - nextState: RL next states of the experience batch sampled.
                  - done: RL termination signals of the experience batch sampled.
         """
+        if timesteps < 2:
+            state, action, reward, nextState, done = zip(
+                *random.sample(self.memory, batchSize))
+            return state, action, reward, nextState, done
 
-        state, action, reward, nextState, done = zip(
-            *random.sample(self.memory, batchSize))
+        idx = random.sample(range(0, len(self.memory) - timesteps + 1), batchSize)
+        state, action, reward, nextState, done = [], [], [], [], []
+        for i in idx:
+            sampled = self.memory[i:i + timesteps]
+            s, a, r, n_s, d = zip(*sampled)
+            state.append(s)
+            action.append(a)
+            reward.append(r)
+            nextState.append(n_s)
+            done.append(d)
+
         return state, action, reward, nextState, done
 
     def __len__(self):
@@ -166,6 +180,52 @@ class ReplayMemory:
 ###############################################################################
 
 
+class LinearBlock(nn.Module):
+
+    def __init__(self, numberOfInputs, numberOfOutputs, dropout=dropout):
+        super().__init__()
+
+        # Definition of some Fully Connected layers
+        self.block = nn.Sequential(nn.Linear(numberOfInputs, numberOfOutputs),
+                                   nn.BatchNorm1d(numberOfOutputs), nn.Dropout(dropout))
+        # Xavier initialization for the entire neural network
+        torch.nn.init.xavier_uniform_(self.block[0].weight)
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class AttentionBlock(nn.Module):
+
+    def __init__(self, n_input, n_output, dropout=dropout):
+        super().__init__()
+        assert n_input == n_output
+        self.block = nn.TransformerEncoderLayer(n_input,
+                                                4,
+                                                dim_feedforward=256,
+                                                dropout=dropout)
+
+    def forward(self, x):
+        """
+        x: torch.tensor of shape [N, T, E]
+
+        return: torch.tensor of shape [N, T, E]
+        """
+        reshaped = x.permute(1, 0, 2)  # [T, N, E]
+        att = self.block(reshaped)
+        return att.permute(1, 0, 2)
+
+
+class ConvBlock(nn.Module):
+
+    def __init__(self, numberOfInputs, numberOfOutputs, dropout=dropout):
+        super().__init__()
+        pass
+
+    def forward(self, x):
+        pass
+
+
 class DQN(nn.Module):
     """
     GOAL: Implementing the Deep Neural Network of the DQN Reinforcement
@@ -193,6 +253,8 @@ class DQN(nn.Module):
                  numberOfInputs,
                  numberOfOutputs,
                  numberOfNeurons=numberOfNeurons,
+                 numberOfLayers=5,
+                 blockType='linear',
                  dropout=dropout):
         """
         GOAL: Defining and initializing the Deep Neural Network of the
@@ -207,35 +269,28 @@ class DQN(nn.Module):
         """
 
         # Call the constructor of the parent class (Pytorch torch.nn.Module)
-        super(DQN, self).__init__()
+        super().__init__()
 
-        # Definition of some Fully Connected layers
-        self.fc1 = nn.Linear(numberOfInputs, numberOfNeurons)
-        self.fc2 = nn.Linear(numberOfNeurons, numberOfNeurons)
-        self.fc3 = nn.Linear(numberOfNeurons, numberOfNeurons)
-        self.fc4 = nn.Linear(numberOfNeurons, numberOfNeurons)
-        self.fc5 = nn.Linear(numberOfNeurons, numberOfOutputs)
+        if blockType == 'linear':
+            block = LinearBlock
+        elif blockType == 'attention':
+            block = AttentionBlock
+        elif blockType == 'conv':
+            block = ConvBlock
 
-        # Definition of some Batch Normalization layers
-        self.bn1 = nn.BatchNorm1d(numberOfNeurons)
-        self.bn2 = nn.BatchNorm1d(numberOfNeurons)
-        self.bn3 = nn.BatchNorm1d(numberOfNeurons)
-        self.bn4 = nn.BatchNorm1d(numberOfNeurons)
+        input_block = block(numberOfInputs, numberOfNeurons, dropout=dropout)
+        hidden_blocks = [
+            block(numberOfNeurons, numberOfNeurons, dropout=dropout)
+            for _ in range(numberOfLayers - 2)
+        ]
+        self.hidden_layers = nn.Sequential(
+            input_block,
+            *hidden_blocks,
+        )
 
-        # Definition of some Dropout layers.
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
-        self.dropout3 = nn.Dropout(dropout)
-        self.dropout4 = nn.Dropout(dropout)
+        self.out_layer = nn.Linear(numberOfNeurons, numberOfOutputs)
 
-        # Xavier initialization for the entire neural network
-        torch.nn.init.xavier_uniform_(self.fc1.weight)
-        torch.nn.init.xavier_uniform_(self.fc2.weight)
-        torch.nn.init.xavier_uniform_(self.fc3.weight)
-        torch.nn.init.xavier_uniform_(self.fc4.weight)
-        torch.nn.init.xavier_uniform_(self.fc5.weight)
-
-    def forward(self, input):
+    def forward(self, x):
         """
         GOAL: Implementing the forward pass of the Deep Neural Network.
 
@@ -244,12 +299,8 @@ class DQN(nn.Module):
         OUTPUTS: - output: Output of the Deep Neural Network.
         """
 
-        x = self.dropout1(F.leaky_relu(self.bn1(self.fc1(input))))
-        x = self.dropout2(F.leaky_relu(self.bn2(self.fc2(x))))
-        x = self.dropout3(F.leaky_relu(self.bn3(self.fc3(x))))
-        x = self.dropout4(F.leaky_relu(self.bn4(self.fc4(x))))
-        output = self.fc5(x)
-        return output
+        x = self.hidden_layers(x)
+        return self.out_layer(x)
 
 
 ###############################################################################
@@ -311,6 +362,8 @@ class TDQN:
                  observationSpace,
                  actionSpace,
                  numberOfNeurons=numberOfNeurons,
+                 numberOfLayers=5,
+                 blockType='linear',
                  dropout=dropout,
                  gamma=gamma,
                  learningRate=learningRate,
@@ -365,11 +418,22 @@ class TDQN:
         self.observationSpace = observationSpace
         self.actionSpace = actionSpace
 
+        self.blockType = blockType
+        self.timesteps = timesteps if self.blockType != 'linear' else 1
+
         # Set the two Deep Neural Networks of the DQN algorithm (policy and target)
-        self.policyNetwork = DQN(observationSpace, actionSpace, numberOfNeurons,
-                                 dropout).to(self.device)
-        self.targetNetwork = DQN(observationSpace, actionSpace, numberOfNeurons,
-                                 dropout).to(self.device)
+        self.policyNetwork = DQN(observationSpace,
+                                 actionSpace,
+                                 numberOfNeurons,
+                                 numberOfLayers=numberOfLayers,
+                                 blockType=blockType,
+                                 dropout=dropout).to(self.device)
+        self.targetNetwork = DQN(observationSpace,
+                                 actionSpace,
+                                 numberOfNeurons,
+                                 numberOfLayers=numberOfLayers,
+                                 blockType=blockType,
+                                 dropout=dropout).to(self.device)
         self.targetNetwork.load_state_dict(self.policyNetwork.state_dict())
         self.policyNetwork.eval()
         self.targetNetwork.eval()
@@ -602,7 +666,8 @@ class TDQN:
             self.policyNetwork.train()
 
             # Sample a batch of experiences from the replay memory
-            state, action, reward, nextState, done = self.replayMemory.sample(batchSize)
+            state, action, reward, nextState, done = self.replayMemory.sample(
+                batchSize, timesteps=self.timesteps)
 
             # Initialization of Pytorch tensors for the RL experience elements
             state = torch.tensor(state, dtype=torch.float, device=self.device)
@@ -613,13 +678,13 @@ class TDQN:
 
             # Compute the current Q values returned by the policy network
             currentQValues = self.policyNetwork(state).gather(
-                1, action.unsqueeze(1)).squeeze(1)
+                -1, action.unsqueeze(-1)).squeeze(-1)  # [N,] or [N, T]
 
             # Compute the next Q values returned by the target network
             with torch.no_grad():
-                nextActions = torch.max(self.policyNetwork(nextState), 1)[1]
+                nextActions = torch.max(self.policyNetwork(nextState), -1)[1]
                 nextQValues = self.targetNetwork(nextState).gather(
-                    1, nextActions.unsqueeze(1)).squeeze(1)
+                    -1, nextActions.unsqueeze(-1)).squeeze(-1)
                 expectedQValues = reward + gamma * nextQValues * (1 - done)
 
             # Compute the Huber loss
