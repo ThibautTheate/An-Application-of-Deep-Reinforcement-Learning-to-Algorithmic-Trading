@@ -1,0 +1,4 @@
+Figures/
+runs/
+*__pycache__/
+*.ipynb_checkpoints/
