@@ -102,7 +102,9 @@ class ReplayMemory:
         OUTPUTS: /
         """
 
-        self.memory = deque(maxlen=capacity)
+        # self.memory = deque(maxlen=capacity)
+        self.memory = list()
+        self.capacity = capacity
 
     def push(self, state, action, reward, nextState, done):
         """
@@ -144,10 +146,10 @@ class ReplayMemory:
             sampled = self.memory[i:i + timesteps]
             s, a, r, n_s, d = zip(*sampled)
             state.append(s)
-            action.append(a)
-            reward.append(r)
-            nextState.append(n_s)
-            done.append(d)
+            action.append(a[-1])
+            reward.append(r[-1])
+            nextState.append(n_s[1:])
+            done.append(d[-1])
 
         return state, action, reward, nextState, done
 
@@ -172,7 +174,8 @@ class ReplayMemory:
         OUTPUTS: /
         """
 
-        self.memory = deque(maxlen=capacity)
+        # self.memory = deque(maxlen=capacity)
+        self.memory = list()
 
 
 ###############################################################################
@@ -199,10 +202,10 @@ class AttentionBlock(nn.Module):
 
     def __init__(self, n_input, n_output, dropout=dropout):
         super().__init__()
-        assert n_input == n_output
-        self.block = nn.TransformerEncoderLayer(n_input,
+        self.proj = nn.Linear(n_input, n_output)
+        self.block = nn.TransformerEncoderLayer(n_output,
                                                 4,
-                                                dim_feedforward=256,
+                                                dim_feedforward=512,
                                                 dropout=dropout)
 
     def forward(self, x):
@@ -212,8 +215,8 @@ class AttentionBlock(nn.Module):
         return: torch.tensor of shape [N, T, E]
         """
         reshaped = x.permute(1, 0, 2)  # [T, N, E]
-        att = self.block(reshaped)
-        return att.permute(1, 0, 2)
+        att = self.block(self.proj(reshaped))
+        return att.permute(1, 0, 2)  # [N, T, E]
 
 
 class ConvBlock(nn.Module):
@@ -300,6 +303,8 @@ class DQN(nn.Module):
         """
 
         x = self.hidden_layers(x)
+        if len(x.shape) > 2:
+            x = x[:, -1, :]
         return self.out_layer(x)
 
 
@@ -603,9 +608,12 @@ class TDQN:
         """
 
         # Choose the best action based on the RL policy
+        state_space = len(state[-1])
+        state = [[0] * state_space if s is None else s for s in state]
+        if self.timesteps == 1:
+            state = state[0]
         with torch.no_grad():
-            tensorState = torch.tensor(state, dtype=torch.float,
-                                       device=self.device).unsqueeze(0)
+            tensorState = torch.tensor(state).float().to(self.device).unsqueeze(0)
             QValues = self.policyNetwork(tensorState).squeeze(0)
             Q, action = QValues.max(0)
             action = action.item()
@@ -660,7 +668,7 @@ class TDQN:
         """
 
         # Check that the replay memory is filled enough
-        if (len(self.replayMemory) >= batchSize):
+        if (len(self.replayMemory) - self.timesteps + 1 >= batchSize):
 
             # Set the Deep Neural Network in training mode
             self.policyNetwork.train()
@@ -670,15 +678,16 @@ class TDQN:
                 batchSize, timesteps=self.timesteps)
 
             # Initialization of Pytorch tensors for the RL experience elements
-            state = torch.tensor(state, dtype=torch.float, device=self.device)
-            action = torch.tensor(action, dtype=torch.long, device=self.device)
-            reward = torch.tensor(reward, dtype=torch.float, device=self.device)
-            nextState = torch.tensor(nextState, dtype=torch.float, device=self.device)
-            done = torch.tensor(done, dtype=torch.float, device=self.device)
+            state = torch.tensor(state, dtype=torch.float,
+                                 device=self.device)  # [N, T, E]
+            action = torch.tensor(action).long().to(self.device)  # [N,]
+            reward = torch.tensor(reward).float().to(self.device)  # [N,]
+            nextState = torch.tensor(nextState).float().to(self.device)  # [N, T-1, E]
+            done = torch.tensor(done).float().to(self.device)  # [N,]
 
             # Compute the current Q values returned by the policy network
             currentQValues = self.policyNetwork(state).gather(
-                -1, action.unsqueeze(-1)).squeeze(-1)  # [N,] or [N, T]
+                -1, action.unsqueeze(-1)).squeeze(-1)  # [N,]
 
             # Compute the next Q values returned by the target network
             with torch.no_grad():
@@ -781,12 +790,13 @@ class TDQN:
                     if plotTraining:
                         totalReward = 0
 
+                    running_states = [None] * (self.timesteps - 1) + [state]
                     # Interact with the training environment until termination
                     while done == 0:
 
                         # Choose an action according to the RL policy and the current RL state
                         action, _, _ = self.chooseActionEpsilonGreedy(
-                            state, previousAction)
+                            running_states, previousAction)
 
                         # Interact with the environment with the chosen action
                         nextState, reward, done, info = trainingEnvList[i].step(action)
@@ -794,6 +804,8 @@ class TDQN:
                         # Process the RL variables retrieved and insert this new experience into the Experience Replay memory
                         reward = self.processReward(reward)
                         nextState = self.processState(nextState, coefficients)
+                        running_states.pop(0)
+                        running_states.append(nextState)
                         self.replayMemory.push(state, action, reward, nextState, done)
 
                         # Trick for better exploration
@@ -907,11 +919,13 @@ class TDQN:
         QValues1 = []
         done = 0
 
+        running_states = [None] * (self.timesteps - 1) + [state]
+
         # Interact with the environment until the episode termination
         while done == 0:
 
             # Choose an action according to the RL policy and the current RL state
-            action, _, QValues = self.chooseAction(state)
+            action, _, QValues = self.chooseAction(running_states)
 
             # Interact with the environment with the chosen action
             nextState, _, done, _ = testingEnvSmoothed.step(action)
@@ -919,6 +933,8 @@ class TDQN:
 
             # Update the new state
             state = self.processState(nextState, coefficients)
+            running_states.pop(0)
+            running_states.append(state)
 
             # Storing of the Q values
             QValues0.append(QValues[0])
@@ -1041,11 +1057,12 @@ class TDQN:
                         stepsCounter = 0
 
                         # Interact with the training environment until termination
+                        running_states = [None] * (self.timesteps - 1) + [state]
                         while done == 0:
 
                             # Choose an action according to the RL policy and the current RL state
                             action, _, _ = self.chooseActionEpsilonGreedy(
-                                state, previousAction)
+                                running_states, previousAction)
 
                             # Interact with the environment with the chosen action
                             nextState, reward, done, info = trainingEnvList[i].step(
@@ -1054,6 +1071,8 @@ class TDQN:
                             # Process the RL variables retrieved and insert this new experience into the Experience Replay memory
                             reward = self.processReward(reward)
                             nextState = self.processState(nextState, coefficients)
+                            running_states.pop(0)
+                            running_states.append(nextState)
                             self.replayMemory.push(state, action, reward, nextState, done)
 
                             # Trick for better exploration
