@@ -34,6 +34,7 @@ if (__name__ == '__main__'):
                         default='linear',
                         type=str,
                         choices=['conv', 'linear', 'attention'])
+    parser.add_argument("-num_episodes", default=50, type=int)
     args = parser.parse_args()
 
     # Initialization of the required variables
@@ -46,12 +47,16 @@ if (__name__ == '__main__'):
         blockType=args.block_type,
     )
     # Training and testing of the trading strategy specified for the stock (market) specified
-    simulator.simulateNewStrategy(strategy, stock, saveStrategy=False, **kwargs)
+    simulator.simulateNewStrategy(strategy,
+                                  stock,
+                                  saveStrategy=False,
+                                  numberOfEpisodes=args.num_episodes,
+                                  **kwargs)
     """
     simulator.displayTestbench()
     simulator.analyseTimeSeries(stock)
-    simulator.simulateNewStrategy(strategy, stock, saveStrategy=False)
-    simulator.simulateExistingStrategy(strategy, stock)
-    simulator.evaluateStrategy(strategy, saveStrategy=False)
-    simulator.evaluateStock(stock)
+    simulator.simulateNewStrategy(strategy, stock, saveStrategy=False, **kwargs)
+    simulator.simulateExistingStrategy(strategy, stock, **kwargs)
+    simulator.evaluateStrategy(strategy, saveStrategy=False, numberOfEpisodes=args.num_episodes, **kwargs)
+    simulator.evaluateStock(stock, numberOfEpisodes=args.num_episodes, **kwargs)
     """
