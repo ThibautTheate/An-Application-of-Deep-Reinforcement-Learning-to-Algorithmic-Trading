@@ -259,6 +259,74 @@ class DQN(nn.Module):
 
 
 ###############################################################################
+################################### Class ConvDQN #################################
+###############################################################################
+
+class ConvDQN(nn.Module):
+    """
+    1. Sliding window
+    2. Random block sampling
+
+    Input: (N, T, 5)
+    Output: Action(buy, sell)
+    """
+
+    def __init__(self, numberOfInputs, numberOfOutputs, numberOfNeurons=numberOfNeurons, dropout=dropout):
+        """
+        GOAL: Defining and initializing the Deep Neural Network of the
+              DQN Reinforcement Learning algorithm.
+        
+        INPUTS: - numberOfInputs: Number of inputs of the Deep Neural Network.
+                - numberOfOutputs: Number of outputs of the Deep Neural Network.
+                - numberOfNeurons: Number of neurons per layer in the Deep Neural Network.
+                - dropout: Droupout probability value (handling of overfitting).
+        
+        OUTPUTS: /
+        """
+
+        # Call the constructor of the parent class (Pytorch torch.nn.Module)
+        super(ConvDQN, self).__init__()
+
+        # Definition of some Fully Connected layers
+        self.conv1 = nn.Conv1d(numberOfInputs, numberOfNeurons, kernel_size=8, stride=4)
+        self.conv2 = nn.Conv1d(numberOfNeurons, numberOfNeurons, kernel_size=4, stride=2)
+        self.conv3 = nn.Conv1d(numberOfNeurons, numberOfNeurons, kernel_size=3, stride=1)
+
+        self.fc1 = nn.Linear(numberOfNeurons, numberOfOutputs)
+
+        # Definition of some Batch Normalization layers
+        self.bn1 = nn.BatchNorm1d(numberOfNeurons)
+        self.bn2 = nn.BatchNorm1d(numberOfNeurons)
+        self.bn3 = nn.BatchNorm1d(numberOfNeurons)
+
+        # Definition of some Dropout layers.
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout)
+
+        # Xavier initialization for the entire neural network
+        torch.nn.init.xavier_uniform_(self.fc1.weight)
+        torch.nn.init.xavier_uniform_(self.conv1.weight)
+        torch.nn.init.xavier_uniform_(self.conv2.weight)
+        torch.nn.init.xavier_uniform_(self.conv3.weight)
+
+    
+    def forward(self, input):
+        """
+        GOAL: Implementing the forward pass of the Deep Neural Network.
+        
+        INPUTS: - input: Input of the Deep Neural Network.
+        
+        OUTPUTS: - output: Output of the Deep Neural Network.
+        """
+
+        x = self.dropout1(F.leaky_relu(self.bn1(self.conv1(input))))
+        x = self.dropout2(F.leaky_relu(self.bn2(self.conv2(x))))
+        x = self.dropout3(F.leaky_relu(self.bn3(self.conv3(x))))
+        output = self.fc1(x)
+        return output
+
+###############################################################################
 ################################ Class TDQN ###################################
 ###############################################################################
 
